@@ -1,4 +1,4 @@
-name: "🤖 Setup Godot"
+name: "Setup Godot CI/CD"
 description: "Setup Godot (with or without .NET) on macOS, Linux CI/CD runners." 
 author: "Niranjan Shk"
 branding:
