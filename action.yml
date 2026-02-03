@@ -1,5 +1,5 @@
 name: "Setup Godot CI/CD"
-description: "Setup Godot (with or without .NET) on macOS, Linux CI/CD runners." 
+description: "Setup Godot (with or without .NET) on macOS, Linux CI/CD runners."
 author: "Niranjan Shk"
 branding:
   icon: "play"
@@ -10,24 +10,24 @@ inputs:
     description: "Godot version (e.g. 4.2.1)"
     required: true
   headless:
-    description: "Install headless version"
+    description: "Install headless version (Linux only). Ignored on macOS."
     required: false
     default: "true"
   dotnet:
-    description: Install the .NET / mono version (Adds C# support). ALso selects the matching mono export-templates archive when isntall-exprt-templages is true.
+    description: "Install the .NET / mono version (adds C# support). Also selects the matching mono export-template archive when install-export-templates is true."
     required: false
     default: "false"
   install-export-templates:
-    description: Download and install export templates into the standard Godot.
+    description: "Download and install export templates into the standard Godot templates directory."
     required: false
     default: "false"
 
 outputs:
   godot-path:
-    description: Ansoulute path to the installed godot bunary.
+    description: Absolute path to the installed godot binary.
     value: ${{ steps.set-var.outputs.godot-path }}
   templates-path:
-    description: Absolute path to the export-templates directory
+    description: Absolute path to the export-templates directory (empty string when install-export-templates is false).
     value: ${{ steps.set-var.outputs.templates-path }}
 
 runs:
@@ -36,59 +36,75 @@ runs:
     - name: Set variables
       id: set-var
       shell: bash
+      env:
+        INPUT_VERSION:   ${{ inputs.version }}
+        INPUT_HEADLESS:  ${{ inputs.headless }}
+        INPUT_DOTNET:    ${{ inputs.dotnet }}
+        INPUT_TEMPLATES: ${{ inputs.install-export-templates }}
+        RUNNER_OS:       ${{ runner.os }}
       run: |
         set -euo pipefail
 
-        VERSION="${{ inputs.version }}"
+        VERSION="${INPUT_VERSION}"
         TAG="${VERSION}-stable"
         GH_BASE="https://github.com/godotengine/godot/releases/download/${TAG}"
-        MONO_PREFIX=""   # empty  → standard buildo
-        [[ "${{ inputs.dotnet }}" == "true" ]] && MONO_PREFIX="mono_"
 
-        # Linux
-        if [[ "${{ runner.os }}" == "Linux" ]]; then
-          HEADLESS_SUFFUX=""
-          [[ "${{ inputs.headless }}" = "true" ]] && HEADLESS_SUFFUX=".headless"
-
-          ASSET_NAME="Godot_v${VERSION}-stable_${MONO_PREFIX}linux.x86_64${HEADLESS_SUFFUX}.zip"
-          INSTALL_DIR="/usr/local/bin/"
-          GODOT_PATH="${INSTALL_DIR}/godot"
+        MONO_PREFIX=""
+        if [[ "${INPUT_DOTNET}" == "true" ]]; then
+          MONO_PREFIX="mono_"
         fi
 
-        # macOS
-        if [[ "${{runner.os}}" = "macOS" ]]; then
+        # Export-template asset name is the same on every platform.
+        TPL_ASSET="Godot_v${VERSION}-stable_${MONO_PREFIX}export_templates.tpz"
+
+        # Per-platform variables 
+        if [[ "${RUNNER_OS}" == "Linux" ]]; then
+          HEADLESS_SUFFIX=""
+          if [[ "${INPUT_HEADLESS}" == "true" ]]; then
+            HEADLESS_SUFFIX=".headless"
+          fi
+          ASSET_NAME="Godot_v${VERSION}-stable_${MONO_PREFIX}linux.x86_64${HEADLESS_SUFFIX}.zip"
+          GODOT_DIR="${HOME}/.local/bin"
+          GODOT_PATH="${GODOT_DIR}/godot"
+          TEMPLATES_DIR="${HOME}/.local/share/godot/templates/${VERSION}.stable"
+
+        elif [[ "${RUNNER_OS}" == "macOS" ]]; then
           ASSET_NAME="Godot_v${VERSION}-stable_${MONO_PREFIX}macos.universal.zip"
-          INSTALL_DIR="/usr/local/bin"
-          GODOT_PATH="${INSTALL_DIR}/godot"
+          GODOT_DIR="${HOME}/.local/bin"
+          GODOT_PATH="${GODOT_DIR}/godot"
+          TEMPLATES_DIR="${HOME}/Library/Application Support/godot/templates/${VERSION}.stable"
+
+        else
+          echo "ERROR: unsupported runner OS: ${RUNNER_OS}" >&2
+          exit 1
         fi
 
-        # Export templates
-        TPL_ASSET="Godot_v${VERSION}-stable_${MONO_PREFIX}export-templates.tpz"
-        # Godot looks here by default on all platforms:
-        TEMPLATES_DIR="${HOME}/.local/shared/godot/templates/${VERSION}.stable"
-        [[ "${{ runner.os }}" == "macOS" ]] && TEMPLATES_DIR="${HOME}/Library/Application Support/godot/templates/${VERSION}.stable"
+        # Add binary directory to PATH for future steps
+        echo "${GODOT_DIR}" >> "$GITHUB_PATH"
 
-        # ENV
+        # Persist for all later steps 
         {
           echo "VERSION=${VERSION}"
-          echo TAG=${TAG}
+          echo "TAG=${TAG}"
           echo "GH_BASE=${GH_BASE}"
           echo "ASSET_NAME=${ASSET_NAME}"
           echo "TPL_ASSET=${TPL_ASSET}"
-          echo "INSTALL_DIR=${INSTALL_DIR}"
           echo "GODOT_PATH=${GODOT_PATH}"
           echo "TEMPLATES_DIR=${TEMPLATES_DIR}"
         } >> "$GITHUB_ENV"
 
-        # ── Write step outputs for downstream jobs ────────────
+        # Step outputs for downstream jobs 
+        TPL_OUT=""
+        if [[ "${INPUT_TEMPLATES}" == "true" ]]; then
+          TPL_OUT="${TEMPLATES_DIR}"
+        fi
         {
           echo "godot-path=${GODOT_PATH}"
-          echo "templates-path=$( [[ "${{ inputs.install-export-templates }}" == "true" ]] && echo "${TEMPLATES_DIR}" || echo "" )"
+          echo "templates-path=${TPL_OUT}"
         } >> "$GITHUB_OUTPUT"
 
-        echo "=== Resolved asset: ${ASSET_NAME}"
-        echo "=== Download URL : ${GH_BASE}/${ASSET_NAME}"
-
+        echo "=== Resolved asset : ${ASSET_NAME}"
+        echo "=== Download URL   : ${GH_BASE}/${ASSET_NAME}"
 
     - uses: actions/cache@v4
       id: cache-editor
@@ -98,62 +114,61 @@ runs:
 
     - uses: actions/cache@v4
       id: cache-templates
+      if: inputs.install-export-templates == 'true'
       with:
         path: /tmp/godot-cache/templates
-        key: godot-templates-${{ runner.os }}-${{ inputs.version }}-dotnet-${{ inputs.dotnet }}-headless-${{ inputs.headless }}
+        key: godot-templates-${{ runner.os }}-${{ inputs.version }}-dotnet-${{ inputs.dotnet }}
 
     - name: Download Godot editor
       shell: bash
       if: steps.cache-editor.outputs.cache-hit != 'true'
       run: |
         set -euo pipefail
-
         mkdir -p /tmp/godot-cache/editor
-        echo "Downloading ${GH_BASE}/${ASSET_NAME} ..."
+        echo "Downloading ${GH_BASE}/${ASSET_NAME} …"
         curl -sL -o "/tmp/godot-cache/editor/${ASSET_NAME}" "${GH_BASE}/${ASSET_NAME}"
-        echo "Download complete: $(du -h "/tmp/godot-cache/editor/${ASSET_NAME} | cut -f1)"
+        echo "Download complete: $(du -h "/tmp/godot-cache/editor/${ASSET_NAME}" | cut -f1)"
 
     - name: Install Godot (Linux)
       shell: bash
-      if: runner.os == "Linux"
+      if: runner.os == 'Linux'
       run: |
         set -euo pipefail
-
         mkdir -p /tmp/godot-install
-        unzip -o "/tmp/godot-cache/editor/${ASSET_NAME}" -d "/tmp/godot-install"
+        unzip -o "/tmp/godot-cache/editor/${ASSET_NAME}" -d /tmp/godot-install
 
         BINARY=$(find /tmp/godot-install -maxdepth 1 -type f -executable | head -1)
         if [[ -z "${BINARY}" ]]; then
-          echo "ERROR: no executable found after unzipping ${ASSET_NAME}" > &2
+          echo "ERROR: no executable found after unzipping ${ASSET_NAME}" >&2
           find /tmp/godot-install
           exit 1
         fi
 
-        sudo cp "${BINARY}" "${GODOT_PATH}"
-        sudo chmod +x "${GODOT_PATH}"
+        mkdir -p "$(dirname "${GODOT_PATH}")"
+        cp "${BINARY}" "${GODOT_PATH}"
+        chmod +x "${GODOT_PATH}"
         echo "Installed: ${GODOT_PATH}"
 
-    - name: Install Godot macOS
+    - name: Install Godot (macOS)
       shell: bash
-      if: runner.os = "macOS"
+      if: runner.os == 'macOS'
       run: |
         set -euo pipefail
+        mkdir -p /tmp/godot-install
+        unzip -o "/tmp/godot-cache/editor/${ASSET_NAME}" -d /tmp/godot-install
 
-        mkdir /tmp/godot-install
-        unzip -o "/tmp/godot-cache/editor${ASSET_NAME}" -d /tmp/godot-install
-
-        APP_BIN=$(find /tmp/godot-install -path "*/Godot.app/Contens/MacOS/Godot" -type f | head -1)
+        APP_BIN=$(find /tmp/godot-install -path "*/Godot.app/Contents/MacOS/Godot" -type f | head -1)
         if [[ -z "${APP_BIN}" ]]; then
-          echo "ERROR: Godot.app binary is not found after unzipping" > &2
+          echo "ERROR: Godot.app binary not found after unzipping" >&2
           find /tmp/godot-install
           exit 1
         fi
 
-        sudo cp "${APP_BIN}" "${GODOT_PATH}"
-        sudo chmod -x "${GODOT_PATH}"
+        mkdir -p "$(dirname "${GODOT_PATH}")"
+        cp "${APP_BIN}" "${GODOT_PATH}"
+        chmod +x "${GODOT_PATH}"
 
-        # macOS may quarantine downloaded binaries; strip the flag.
-        sudo xattr -d com.apple.quarantine "${GODOT_PATH}" 2>/dev/null || true
+        xattr -d com.apple.quarantine "${GODOT_PATH}" 2>/dev/null || true
         echo "Installed: ${GODOT_PATH}"
 
     - name: Download export templates
@@ -163,11 +178,9 @@ runs:
         steps.cache-templates.outputs.cache-hit != 'true'
       run: |
         set -euo pipefail
-
         mkdir -p /tmp/godot-cache/templates
         echo "Downloading ${GH_BASE}/${TPL_ASSET} …"
-        curl -sL -o "/tmp/godot-cache/templates/${TPL_ASSET}" \
-             "${GH_BASE}/${TPL_ASSET}"
+        curl -sL -o "/tmp/godot-cache/templates/${TPL_ASSET}" "${GH_BASE}/${TPL_ASSET}"
         echo "Download complete: $(du -h "/tmp/godot-cache/templates/${TPL_ASSET}" | cut -f1)"
 
     - name: Install export templates
@@ -177,13 +190,11 @@ runs:
         set -euo pipefail
         mkdir -p "${TEMPLATES_DIR}"
 
-        unzip -o "/tmp/godot-cache/templates/${TPL_ASSET}" \
-              -d /tmp/godot-templates-extract
-        # Move everything from the nested templates/ dir up one level
+        unzip -o "/tmp/godot-cache/templates/${TPL_ASSET}" -d /tmp/godot-templates-extract
+
         if [[ -d /tmp/godot-templates-extract/templates ]]; then
           cp -r /tmp/godot-templates-extract/templates/* "${TEMPLATES_DIR}/"
         else
-          # Fallback: some releases may not have the wrapper dir
           cp -r /tmp/godot-templates-extract/* "${TEMPLATES_DIR}/"
         fi
 
@@ -191,9 +202,10 @@ runs:
         echo "Contents:"
         ls -la "${TEMPLATES_DIR}"
 
-
     - name: Verify Godot installation
       shell: bash
+      env:
+        INPUT_TEMPLATES: ${{ inputs.install-export-templates }}
       run: |
         set -euo pipefail
         echo "=== Godot binary ==="
@@ -201,11 +213,9 @@ runs:
 
         echo ""
         echo "=== Version check ==="
-        # --headless is safe to pass on every platform; on a
-        # full editor build it simply suppresses the GUI.
         "${GODOT_PATH}" --headless --version
 
-        if [[ "${{ inputs.install-export-templates }}" == "true" ]]; then
+        if [[ "${INPUT_TEMPLATES}" == "true" ]]; then
           echo ""
           echo "=== Export templates ==="
           ls "${TEMPLATES_DIR}"
