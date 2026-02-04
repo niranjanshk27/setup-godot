@@ -145,7 +145,7 @@ runs:
         mkdir -p "${GODOT_INSTALL_DIR}"
         # We use dotglob if set, but simple * usually works only for non-hidden.
         # To be safe, just move valid items.
-        mv /tmp/godot-install/* "${GODOT_INSTALL_DIR}/"
+        mv -f /tmp/godot-install/* "${GODOT_INSTALL_DIR}/"
 
         # Find binary (depth 2 allows for nested folder in zip)
         BINARY=$(find "${GODOT_INSTALL_DIR}" -maxdepth 2 -type f -executable | head -1)
@@ -172,7 +172,7 @@ runs:
         # Move app bundle to install dir
         mkdir -p "${GODOT_INSTALL_DIR}"
         if [[ -d "/tmp/godot-install/Godot.app" ]]; then
-            mv "/tmp/godot-install/Godot.app" "${GODOT_INSTALL_DIR}/"
+            mv -f "/tmp/godot-install/Godot.app" "${GODOT_INSTALL_DIR}/"
         else
             echo "ERROR: Godot.app not found in extracted files"
             ls -R /tmp/godot-install
